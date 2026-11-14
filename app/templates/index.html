@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}总览 · {{ app_name }}{% endblock %}
+{% block crumb %}总览{% endblock %}
+{% block meta %}<span class="dot ok"></span>服务正常 · 库内批次 {{ stats.batches }} · 明细 {{ stats.fact_rows }} 行{% endblock %}
+{% block actions %}
+<a class="btn secondary small" href="/review">历史与复核</a>
+<a class="btn small" href="/workbench">去上传校验</a>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">总览</h1>
+    <p class="page-sub">上游每天的站点订单 CSV：全对才入库，任一行非法整份回滚；同一份文件按 sha256 幂等，不重复写库。</p>
+  </div>
+  <div class="page-head-actions">
+    <a class="btn small" href="/workbench">去工作台</a>
+  </div>
+</div>
+
+<div class="kpi-strip">
+  <div class="kpi">
+    <div class="k-label">累计批次</div>
+    <div class="k-value">{{ stats.batches }}</div>
+    <div class="k-note">batches 表（含 seed 历史批次）</div>
+  </div>
+  <div class="kpi ok">
+    <div class="k-label">累计行数</div>
+    <div class="k-value">{{ stats.fact_rows }}</div>
+    <div class="k-note">fact_orders 明细 · {{ stats.sites }} 个站点</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">最近入库</div>
+    <div class="k-value" style="font-size:16px">{{ recent_batches[0].created_at[:10] if recent_batches else '—' }}</div>
+    <div class="k-note">{% if recent_batches %}<code>{{ recent_batches[0].batch_id }}</code> · {{ recent_batches[0].filename }}{% else %}还没有批次{% endif %}</div>
+  </div>
+  <div class="kpi {% if stats.rejected_attempts %}err{% endif %}">
+    <div class="k-label">回滚次数</div>
+    <div class="k-value">{{ stats.rejected_attempts }}</div>
+    <div class="k-note">被拒绝 / 编码失败的上传</div>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>最近批次</h2>
+    <div class="panel-actions">
+      <span class="tag">{{ recent_batches|length }} 条</span>
+      <a class="btn secondary small" href="/review">全部</a>
+    </div>
+  </div>
+  <div class="table-wrap roomy">
+    <table class="dense">
+      <thead><tr><th>批号</th><th>文件</th><th>编码</th><th class="num">行数</th><th class="num">金额合计</th><th>入库时间</th><th></th></tr></thead>
+      <tbody>
+      {% for b in recent_batches %}
+        <tr>
+          <td class="nowrap"><a href="/result/{{ b.batch_id }}">{{ b.batch_id }}</a>
+            {% if b.forced %}<span class="tag warn">forced</span>{% endif %}
+            {% if b.superseded_by %}<span class="tag">已替代</span>{% endif %}</td>
+          <td class="cell-ellipsis">{{ b.filename }}</td>
+          <td><span class="tag">{{ b.encoding }}</span>{% if b.bom %} BOM{% endif %}</td>
+          <td class="num">{{ b.row_count }}</td>
+          <td class="num">¥{{ b.total_amount }}</td>
+          <td class="small muted nowrap">{{ b.created_at }}</td>
+          <td class="small"><a href="/result/{{ b.batch_id }}">看结果</a></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7" class="muted">还没有批次，去 <a href="/workbench">上传校验</a> 传一份。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="split wide-left">
+  <div>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>最近上传结论</h2>
+        <div class="panel-actions"><a class="btn secondary small" href="/review">上传记录</a></div>
+      </div>
+      <div class="table-wrap roomy">
+        <table class="dense">
+          <thead><tr><th>#</th><th>文件</th><th>结论</th><th class="num">错误</th><th>时间</th></tr></thead>
+          <tbody>
+          {% for a in recent_attempts %}
+            <tr>
+              <td>{{ a.attempt_id }}</td>
+              <td class="cell-ellipsis">{{ a.filename }}</td>
+              <td>
+                {% if a.status == 'committed' %}<span class="tag ok">已入库</span>
+                {% elif a.status == 'duplicate_file' %}<span class="tag warn">重复文件</span>
+                {% elif a.status == 'rolled_back' %}<span class="tag err">已回滚</span>
+                {% else %}<span class="tag err">{{ a.status }}</span>{% endif %}
+              </td>
+              <td class="num">{{ a.error_count }}</td>
+              <td class="small muted nowrap">{{ a.created_at[5:16] }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="5" class="muted">还没有上传记录。</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="panel-body tight">
+        <p class="small muted" style="margin:0">结论口径：committed 已入库；duplicate_file 同 sha256 幂等命中未写库；rolled_back / rejected 整份回滚，明细行数不变。</p>
+      </div>
+    </section>
+  </div>
+
+  <div>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>快捷操作</h2>
+        <div class="panel-actions"><span class="tag">4 步主流程</span></div>
+      </div>
+      <div class="panel-body tight">
+        <p style="margin-top:2px">
+          <a class="btn small" href="/workbench">去上传校验</a>
+        </p>
+        <p>
+          <a class="btn secondary small" href="/api/samples/normal_500.csv">下载 normal_500.csv</a>
+          <a class="btn secondary small" href="/review">看历史与复核</a>
+        </p>
+        <ul class="list small" style="margin-bottom:0">
+          <li><b>1 份 = 1 事务</b>：任一行非法 → 整份回滚，明细行数不变。</li>
+          <li><b>行号 + 列名</b>：每处错误都给文件行号、列名、原值、原因。</li>
+          <li><b>sha256 幂等</b>：同一份文件重传不再写库，除非显式覆盖。</li>
+        </ul>
+      </div>
+      <div class="panel-actions">
+        <a class="btn secondary small" href="/workbench#m2">表头自检</a>
+        <a class="btn secondary small" href="/review">复核口径</a>
+      </div>
+    </section>
+
+    <details class="help" style="margin-top:12px">
+      <summary>业务背景、演示步骤、样例数据与列契约</summary>
+      <p class="small" style="margin-top:6px">
+        使用者：数据平台组入库值班同学。上游每天早上通过邮件/共享盘给一份站点订单 CSV，
+        要求「全对才入库」。过去靠手工开表看：编码乱了、表头列名被改、主键有重复、
+        日期写成 2026-02-30、金额带千分位——一人一天要花 40 分钟翻表，
+        而且一旦先写了一半才发现第 300 行有错，库里的数据就脏了。
+      </p>
+      <p class="small muted">
+        <b>上游每天的 CSV，要么整份入库，要么整份退回</b>：本系统替代「人肉翻表 + 手工导入」这一段，
+        输出给入库值班同学（上传即得结论）和复核岗（看历史批次与回滚依据）。
+      </p>
+
+      <h3>演示步骤（4 步走完主流程）</h3>
+      <ol class="list small">
+        <li>在<a href="/workbench">上传校验</a>页下载 <b>normal_500.csv</b>，直接上传 → 结论「已入库」，得批号与站点聚合表。</li>
+        <li>上传 <b>broken.csv</b> → 结论「整体回滚」，页面列出 5 条逐行错误（行号/列/原值/原因）。</li>
+        <li>上传 <b>gbk_120.csv</b> → 编码探测显示 GB18030 解码成功，120 行入库。</li>
+        <li>再上传一次 <b>normal_500.csv</b> → 返回 duplicate_file，库内行数不变；看<a href="/review">历史与复核</a>页的复核与重复导入验证。</li>
+      </ol>
+      <p class="small muted">
+        想验证「回滚后行数不变」：先记下状态条上的「明细 N 行」，上传 broken.csv 后刷新，N 不变。
+      </p>
+
+      <h3>样例数据（仓库自带，可下载）</h3>
+      <div class="table-wrap auto">
+        <table class="dense">
+          <thead><tr><th>文件</th><th>说明</th><th>用途</th></tr></thead>
+          <tbody>
+            {% for s in samples %}
+            <tr>
+              <td class="nowrap"><a href="/api/samples/{{ s.name }}">{{ s.name }}</a></td>
+              <td>{{ s.title }}</td>
+              <td class="muted small">{{ s.desc }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <h3>列契约（contract.json 摘要）</h3>
+      <div class="table-wrap auto">
+        <table class="dense">
+          <thead><tr><th>列</th><th>必填</th><th>类型</th><th>约束</th></tr></thead>
+          <tbody>
+            {% for name, spec in contract_columns.items() %}
+            <tr>
+              <td><code>{{ name }}</code> <span class="muted small">{{ spec.label }}</span></td>
+              <td>{% if spec.required %}<span class="tag err">必需</span>{% else %}<span class="tag">可选</span>{% endif %}</td>
+              <td>{{ spec.type }}</td>
+              <td class="small">
+                长度 ≤ {{ spec.max_length }}
+                {% if spec.enum %}｜枚举 {{ spec.enum | join(', ') }}{% endif %}
+                {% if spec.type == 'decimal' %}｜2 位小数，&gt; 0{% endif %}
+                {% if name == 'order_id' %}｜严格递增，重复=duplicate，倒序=out_of_order{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  </div>
+</div>
+{% endblock %}

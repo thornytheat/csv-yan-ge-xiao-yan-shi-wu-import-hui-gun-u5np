@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% set latest = batches[0] if batches else none %}
+{% block title %}历史与复核 · {{ app_name }}{% endblock %}
+{% block crumb %}历史与复核{% endblock %}
+{% block meta %}<span class="dot {% if batches %}ok{% else %}warn{% endif %}"></span>批次 {{ stats.batches }} · 上传记录 {{ attempts|length }} 条 · 回滚 {{ stats.rejected_attempts }} 次{% endblock %}
+{% block actions %}
+<a class="btn secondary small" href="/api/samples/normal_500.csv">下载样例 CSV</a>
+<a class="btn small" href="/workbench">去上传校验</a>
+{% endblock %}
+{% block status_left %}「验证重复导入」只读判定：同 sha256 再次上传会得到 duplicate_file，不写库{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">历史与复核</h1>
+    <p class="page-sub">每行是一个已入库批次或一次上传记录：同 sha256 重传不写库，回滚可见且明细行数不变，聚合用三条独立口径互相核对。</p>
+  </div>
+  <div class="page-head-actions">
+    <a class="btn secondary small" href="/review">刷新</a>
+  </div>
+</div>
+
+<div class="kpi-strip">
+  <div class="kpi">
+    <div class="k-label">已入库批次</div>
+    <div class="k-value">{{ stats.batches }}</div>
+    <div class="k-note">batches 表</div>
+  </div>
+  <div class="kpi ok">
+    <div class="k-label">库内明细行数</div>
+    <div class="k-value">{{ stats.fact_rows }}</div>
+    <div class="k-note">fact_orders · {{ stats.sites }} 个站点</div>
+  </div>
+  <div class="kpi {% if stats.rejected_attempts %}err{% endif %}">
+    <div class="k-label">被拒绝/回滚的上传次数</div>
+    <div class="k-value">{{ stats.rejected_attempts }}</div>
+    <div class="k-note">rejected + encoding_failed</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">本页上传记录</div>
+    <div class="k-value">{{ attempts|length }}</div>
+    <div class="k-note">含 committed / duplicate / 回滚</div>
+  </div>
+</div>
+
+<div class="split result">
+  <div>
+    <section class="panel">
+      <div class="toolbar">
+        <input type="search" id="review-search" placeholder="搜索批次 / 文件 / sha256" aria-label="搜索批次">
+        <select id="review-scope" aria-label="按批次状态筛选">
+          <option value="">全部批次</option>
+          <option value="forced">仅 forced 重灌</option>
+          <option value="superseded">仅已被替代</option>
+        </select>
+        <select id="review-encoding" aria-label="按编码筛选">
+          <option value="">全部编码</option>
+          {% for enc in batches | map(attribute='encoding') | unique %}
+          <option value="{{ enc }}">{{ enc }}</option>
+          {% endfor %}
+        </select>
+        <span class="spacer"></span>
+        <span class="small muted" id="review-stat">共 {{ batches|length }} 条批次</span>
+        <a class="btn secondary small" href="/api/samples/normal_500.csv">下载样例</a>
+      </div>
+      <div class="table-wrap roomy">
+        <table class="dense" id="batches-table">
+          <thead>
+            <tr><th>批号</th><th>文件</th><th>编码</th><th class="num">行数</th><th class="num">金额合计</th><th>时间</th><th>重复导入验证</th></tr>
+          </thead>
+          <tbody>
+          {% for b in batches %}
+            <tr data-batch="{{ b.batch_id }}" data-filename="{{ b.filename }}"
+                data-encoding="{{ b.encoding }}{% if b.bom %} BOM{% endif %}"
+                data-rows="{{ b.row_count }}" data-amount="¥{{ b.total_amount }}"
+                data-time="{{ b.created_at }}" data-href="/result/{{ b.batch_id }}"
+                data-sha="{{ b.sha256[:16] }}…"
+                data-forced="{{ '1' if b.forced else '0' }}"
+                data-superseded="{{ '1' if b.superseded_by else '0' }}"
+                data-search="{{ b.batch_id }} {{ b.filename }} {{ b.sha256 }} {{ b.encoding }}">
+              <td class="nowrap"><a href="/result/{{ b.batch_id }}">{{ b.batch_id }}</a>
+                {% if b.forced %}<span class="tag warn">forced</span>{% endif %}
+                {% if b.superseded_by %}<span class="tag">已替代</span>{% endif %}</td>
+              <td class="cell-ellipsis">{{ b.filename }}</td>
+              <td><span class="tag">{{ b.encoding }}</span>{% if b.bom %} BOM{% endif %}</td>
+              <td class="num">{{ b.row_count }}</td>
+              <td class="num">¥{{ b.total_amount }}</td>
+              <td class="small muted nowrap">{{ b.created_at }}</td>
+              <td>
+                <button type="button" class="secondary small"
+                        data-replay-sha="{{ b.sha256 }}" data-batch="{{ b.batch_id }}">验证重复导入</button>
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="7" class="muted">还没有入库批次。</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="panel-body tight">
+        <p class="small muted" style="margin:0">点一行可在右侧看回执详情；「验证重复导入」只读判定，不写库。</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>上传记录（含回滚记录）</h2>
+        <div class="panel-actions"><span class="tag">{{ attempts|length }} 条</span></div>
+      </div>
+      <div class="table-wrap roomy">
+        <table class="dense" id="attempts-table">
+          <thead><tr><th>#</th><th>文件</th><th>结论</th><th>编码</th><th class="num">行数</th><th class="num">错误数</th><th>时间</th><th></th></tr></thead>
+          <tbody>
+          {% for a in attempts %}
+            <tr data-search="{{ a.attempt_id }} {{ a.filename }} {{ a.status }} {{ a.batch_id or '' }}">
+              <td>{{ a.attempt_id }}</td>
+              <td class="cell-ellipsis">{{ a.filename }}</td>
+              <td>
+                {% if a.status == 'committed' %}<span class="tag ok">已入库</span>
+                {% elif a.status == 'duplicate_file' %}<span class="tag warn">重复文件</span>
+                {% elif a.status == 'rolled_back' %}<span class="tag err">事务回滚</span>
+                {% elif a.status == 'rejected' %}<span class="tag err">校验拒绝</span>
+                {% elif a.status == 'encoding_failed' %}<span class="tag err">编码失败</span>
+                {% else %}<span class="tag">{{ a.status }}</span>{% endif %}
+              </td>
+              <td class="small">{{ a.encoding or '-' }}</td>
+              <td class="num">{{ a.row_count }}</td>
+              <td class="num">{{ a.error_count }}</td>
+              <td class="small muted nowrap">{{ a.created_at }}</td>
+              <td class="small nowrap">
+                {% if a.error_count %}
+                <a href="/result/attempt/{{ a.attempt_id }}">看逐行错误</a>
+                {% elif a.batch_id %}
+                <a href="/result/{{ a.batch_id }}">看批次</a>
+                {% endif %}
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="8" class="muted">还没有上传记录。</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <section class="panel pane-sticky">
+    <div class="panel-head">
+      <h2>回执详情</h2>
+      <div class="panel-actions"><span class="tag" id="detail-tag">{% if latest %}{% if latest.forced %}forced{% else %}已入库{% endif %}{% else %}无批次{% endif %}</span></div>
+    </div>
+    <div class="panel-body">
+      <div class="table-wrap auto">
+        <table class="dense">
+          <tbody>
+            <tr><th style="width:96px">批号</th><td><code id="detail-batch">{{ latest.batch_id if latest else '—' }}</code></td></tr>
+            <tr><th>文件</th><td id="detail-filename" class="cell-ellipsis">{{ latest.filename if latest else '—' }}</td></tr>
+            <tr><th>编码</th><td id="detail-encoding">{{ (latest.encoding ~ (' BOM' if latest.bom else '')) if latest else '—' }}</td></tr>
+            <tr><th>行数</th><td id="detail-rows">{{ latest.row_count if latest else '—' }}</td></tr>
+            <tr><th>金额合计</th><td id="detail-amount">¥{{ latest.total_amount if latest else '—' }}</td></tr>
+            <tr><th>入库时间</th><td id="detail-time" class="small muted">{{ latest.created_at if latest else '—' }}</td></tr>
+            <tr><th>sha256</th><td id="detail-sha" class="mono small" style="word-break:break-all">{{ (latest.sha256[:16] ~ '…') if latest else '—' }}</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div id="replay-result" class="alert alert-info" hidden style="margin-top:10px"></div>
+      <div id="replay-error" class="alert alert-error" hidden style="margin-top:10px"></div>
+
+      <details class="help" style="margin-top:10px">
+        <summary>复核口径（值班同学照着念）</summary>
+        <ul class="list small" style="margin:6px 0 0">
+          <li><b>全对才入库</b>：表头契约 + 全部行校验通过后，才在一个事务里写批次、明细、聚合。</li>
+          <li><b>回滚可见</b>：任一行非法 → KPI「被拒绝/回滚的上传次数」+1，明细行数不变，可点开看逐行错误。</li>
+          <li><b>重复文件</b>：sha256 相同 → duplicate_file，不写库；确需重灌用 force_new_batch，旧批次标 superseded_by。</li>
+          <li><b>聚合自证</b>：结果页聚合用三条独立口径（分组 cents / 明细线性 / Decimal）互相核对。</li>
+        </ul>
+      </details>
+    </div>
+    <div class="panel-actions">
+      <a class="btn secondary small" id="detail-link" href="{{ ('/result/' ~ latest.batch_id) if latest else '/workbench' }}">打开结果页</a>
+      <a class="btn secondary small" href="/workbench">去上传校验</a>
+    </div>
+  </section>
+</div>
+{% endblock %}

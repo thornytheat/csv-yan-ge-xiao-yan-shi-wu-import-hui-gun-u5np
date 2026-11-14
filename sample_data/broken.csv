@@ -1,0 +1,13 @@
+site,category,order_id,order_date,amount,qty
+beijing,grocery,900001,2026-11-05,128.50,3
+beijing,grocery,900002,2026-11-05,128.50,3
+shanghai,grocery,900003,2026-02-30,128.50,3
+beijing,grocery,900004,2026-11-05,128.50,3
+beijing-haidian-west-zone-warehouse-0001,grocery,900005,2026-11-05,128.50,3
+beijing,furniture,900006,2026-11-05,128.50,3
+guangzhou,grocery,900006,2026-11-05,128.50,3
+beijing,grocery,900007,2026-11-05,128.50,3
+shenzhen,grocery,900003,2026-11-05,128.50,3
+beijing,grocery,900008,2026-11-05,128.50,3
+beijing,apparel,900009,2026-11-05,128.50,3
+beijing,grocery,900010,2026-11-05,999.99,7

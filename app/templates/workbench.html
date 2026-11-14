@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+{% block title %}上传与校验 · {{ app_name }}{% endblock %}
+{% block crumb %}上传与校验{% endblock %}
+{% block meta %}<span class="dot {% if result and result.status != 'committed' %}err{% else %}ok{% endif %}"></span>契约 {{ column_contract|length }} 列 · 必填 {{ column_contract | selectattr('required') | list | length }} 列 · 库内明细 {{ stats.fact_rows }} 行{% endblock %}
+{% block actions %}
+<a class="btn secondary small" href="/api/samples/normal_500.csv">下载 normal_500.csv</a>
+<a class="btn secondary small" href="/review">历史与复核</a>
+{% endblock %}
+{% block status_left %}一份文件走完 6 个模块 · 任一行非法整份回滚 · 库内明细行数不变{% endblock %}
+{% block status_right %}{{ app_name }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">上传与校验工作台</h1>
+    <p class="page-sub">编码探测 → 表头契约 → 行级校验 → 分组聚合（自证一致）→ 事务导入 → 错误报告；左侧选文件与策略，右侧看契约与结论。</p>
+  </div>
+</div>
+
+<div class="split">
+  <section class="panel pane-sticky" id="m1">
+    <div class="panel-head">
+      <h2>上传与契约</h2>
+      <div class="panel-actions"><span class="tag">模块 1</span></div>
+    </div>
+    <div class="panel-body">
+      <form id="upload-form" method="post" action="/workbench" enctype="multipart/form-data">
+        <div class="field">
+          <label for="file">CSV 文件（UTF-8 / UTF-8-BOM / GBK，最大 8MB）</label>
+          <input type="file" id="file" name="file" accept=".csv,text/csv" required>
+        </div>
+
+        <div class="field">
+          <label for="extra_policy">契约外列策略</label>
+          <select id="extra_policy" name="extra_policy">
+            {% for p in policies %}
+            <option value="{{ p.value }}">{{ p.label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="force_new_batch">覆盖策略</label>
+          <label class="small" style="display:flex;gap:8px;align-items:flex-start;color:var(--ink);font-weight:400">
+            <input type="checkbox" id="force_new_batch" name="force_new_batch" value="1" style="width:auto;margin-top:4px">
+            <span>force_new_batch（同 sha256 已入库时仍新建批次；旧批次保留并标记 superseded_by，用于追溯重灌）</span>
+          </label>
+        </div>
+
+        <details class="help">
+          <summary>契约摘要与可用样例</summary>
+          <p class="small muted" style="margin:6px 0 4px">必填列：
+            {% for c in column_contract if c.required %}<code>{{ c.name }}</code>{% if not loop.last %} · {% endif %}{% endfor %}
+          </p>
+          <p class="small muted" style="margin:0 0 4px">可选列：
+            {% for c in column_contract if not c.required %}<code>{{ c.name }}</code>{% else %}无{% endfor %}
+          </p>
+          <ul class="list small" style="margin-bottom:0">
+            {% for s in samples %}
+            <li><a href="/api/samples/{{ s.name }}">{{ s.name }}</a> —— {{ s.desc }}</li>
+            {% endfor %}
+          </ul>
+        </details>
+      </form>
+    </div>
+    <div class="panel-actions">
+      <button type="submit" id="submit-btn" form="upload-form">校验并入库</button>
+      <span class="small muted" id="upload-hint" style="align-self:center">提交后若通过则跳转到结果页。</span>
+    </div>
+  </section>
+
+  <div>
+    <div class="kpi-strip">
+      <div class="kpi">
+        <div class="k-label">契约列</div>
+        <div class="k-value">{{ column_contract|length }}</div>
+        <div class="k-note">contract.json · 列顺序无关</div>
+      </div>
+      <div class="kpi">
+        <div class="k-label">必填列</div>
+        <div class="k-value">{{ column_contract | selectattr('required') | list | length }}</div>
+        <div class="k-note">缺失即拒绝整份文件</div>
+      </div>
+      <div class="kpi ok">
+        <div class="k-label">库内明细</div>
+        <div class="k-value">{{ stats.fact_rows }}</div>
+        <div class="k-note">fact_orders · 回滚不减</div>
+      </div>
+      <div class="kpi {% if stats.rejected_attempts %}warn{% endif %}">
+        <div class="k-label">累计批次</div>
+        <div class="k-value">{{ stats.batches }}</div>
+        <div class="k-note">含 seed 历史批次</div>
+      </div>
+    </div>
+
+    <section class="panel" id="m2">
+      <div class="panel-head">
+        <h2>表头契约</h2>
+        <div class="panel-actions"><span class="tag">表头自检 · 不用传整份文件</span></div>
+      </div>
+      <div class="panel-body">
+        <p class="small muted" style="margin-top:0">粘贴表头行，立即得到契约结论：缺列、额外列、重复列、列顺序是否与契约一致。</p>
+        <div class="field">
+          <label for="header-input">表头行（逗号分隔）</label>
+          <textarea id="header-input" rows="3">site, category ,order_id,order_date,amount,qty</textarea>
+        </div>
+        <div style="display:flex;gap:10px">
+          <button type="button" class="secondary" id="contract-btn">检查表头契约</button>
+          <button type="button" class="secondary" id="contract-extra-btn">再加一列 note 试试 reject/warn</button>
+        </div>
+        <div id="contract-result" class="small" style="margin-top:12px"></div>
+        <div id="contract-error" class="alert alert-error" hidden></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>列契约（contract.json 摘要）</h2>
+        <div class="panel-actions"><span class="tag">{{ column_contract|length }} 列</span></div>
+      </div>
+      <div class="table-wrap roomy">
+        <table class="dense">
+          <thead><tr><th>列</th><th>必填</th><th>类型</th><th class="num">长度上限</th><th>取值约束</th></tr></thead>
+          <tbody>
+            {% for c in column_contract %}
+            <tr>
+              <td><code>{{ c.name }}</code> <span class="muted small">{{ c.label }}</span></td>
+              <td>{% if c.required %}<span class="tag err">必需</span>{% else %}<span class="tag">可选</span>{% endif %}</td>
+              <td>{{ c.type }}</td>
+              <td class="num">{{ c.max_length }}</td>
+              <td class="small">
+                {% if c.enum %}{{ c.enum | join(' / ') }}{% endif %}
+                {% if c.type == 'decimal' %}2 位小数，0.01 ~ 99999999.99{% endif %}
+                {% if c.name == 'order_id' %}严格递增；重复=duplicate，倒序=out_of_order{% endif %}
+                {% if c.type == 'date' %}YYYY-MM-DD，必须真实存在（2026-02-30 非法）{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="panel-body tight">
+        <p class="small muted" style="margin:0">
+          站点枚举：{{ sites | join(' / ') }}；品类枚举：{{ categories | join(' / ') }}。列顺序无关，表头会去首尾空白。
+        </p>
+      </div>
+    </section>
+
+    <section class="panel" id="m3">
+      <div class="panel-head">
+        <h2>行校验</h2>
+        <div class="panel-actions"><span class="tag">模块 3 · 行号 = CSV 文件行</span></div>
+      </div>
+      <div class="table-wrap">
+        <table class="dense">
+          <thead><tr><th>校验项</th><th>触发条件</th><th>错误码</th><th>处置建议</th></tr></thead>
+          <tbody>
+            <tr><td>必填为空</td><td>契约必填列读到空字符串</td><td><code>required</code></td><td class="small">回上游补全该字段；空字符串也视为缺失。</td></tr>
+            <tr><td>长度上限</td><td>去首尾空白后字符数超上限</td><td><code>length</code></td><td class="small">截断或与上游确认口径。</td></tr>
+            <tr><td>类型 / 枚举</td><td>整数、金额、日期格式不符或枚举越界</td><td><code>int_type</code> <code>decimal_scale</code> <code>date_format</code> <code>enum</code></td><td class="small">金额不要带千分位/货币符号，日期统一 YYYY-MM-DD。</td></tr>
+            <tr><td>日期真实存在</td><td>格式对但日期不存在（如 2026-02-30）</td><td><code>date_invalid</code></td><td class="small">上游算错日期，业务确认后重导。</td></tr>
+            <tr><td>主键严格递增</td><td>order_id 与上一可解析行相等 / 更小</td><td><code>duplicate</code> / <code>out_of_order</code></td><td class="small">去重或按主键升序重新导出。</td></tr>
+            <tr><td>列数一致</td><td>本行列数 ≠ 表头列数</td><td><code>column_count</code></td><td class="small">检查是否漏逗号或字段内未转义逗号。</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="panel-body tight">
+        <p class="small muted" style="margin:0">
+          校验顺序：必填 → 长度 → 类型/枚举 → 业务规则；同一单元格只报第一个错，不重复计数。
+          错误同时给 row_no（数据行，1 起）与 line_no（文件行，含表头）。
+        </p>
+      </div>
+    </section>
+
+    <section class="panel" id="m4">
+      <div class="panel-head">
+        <h2>分组聚合</h2>
+        <div class="panel-actions"><span class="tag">模块 4 · 三条独立口径自证</span></div>
+      </div>
+      <div class="table-wrap auto">
+        <table class="dense">
+          <thead><tr><th>口径</th><th>怎么算</th><th>核对什么</th></tr></thead>
+          <tbody>
+            <tr><td>分组 cents 累加</td><td>按 site 分组，金额先转分再累加</td><td class="small">组内金额和 = 明细线性累加</td></tr>
+            <tr><td>明细线性累加</td><td>逐行累加 amount_cents</td><td class="small">组内行数和 = 明细行数</td></tr>
+            <tr><td>Decimal 复核</td><td>用原始字符串做 Decimal 相加</td><td class="small">与 cents 结果一致（无浮点误差）</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="panel-body tight">
+        <p class="small muted" style="margin:0">聚合来自同一批明细，与明细累计独立口径核对；结果页「聚合」标签可看按站点明细。</p>
+      </div>
+    </section>
+
+    <section class="panel" id="m5">
+      <div class="panel-head">
+        <h2>事务导入</h2>
+        <div class="panel-actions"><span class="tag">模块 5 · 1 份 = 1 事务</span></div>
+      </div>
+      <div class="table-wrap auto">
+        <table class="dense">
+          <thead><tr><th>场景</th><th>结论</th><th>库内影响</th></tr></thead>
+          <tbody>
+            <tr><td>全部行通过</td><td><span class="tag ok">committed</span></td><td class="small">一个事务写批次 + 明细 + 聚合</td></tr>
+            <tr><td>任一行非法</td><td><span class="tag err">rolled_back</span></td><td class="small">整份回滚，明细行数不变</td></tr>
+            <tr><td>同 sha256 已入库</td><td><span class="tag warn">duplicate_file</span></td><td class="small">不写库，返回既有批次</td></tr>
+            <tr><td>勾选 force_new_batch</td><td><span class="tag warn">forced</span></td><td class="small">新建批次，旧批次标记 superseded_by</td></tr>
+            <tr><td>编码无法解码</td><td><span class="tag err">encoding_failed</span></td><td class="small">不进入行校验，给前 16 字节建议</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" id="m6">
+      <div class="panel-head">
+        <h2>错误报告</h2>
+        <div class="panel-actions">
+          {% if result and (result.status == 'rejected' or result.status in ('encoding_failed','rolled_back')) %}
+          <span class="tag err">{{ result.status }}</span>
+          {% else %}<span class="tag">模块 6 · 逐行依据</span>{% endif %}
+        </div>
+      </div>
+      {% if result and (result.status == 'rejected' or result.status in ('encoding_failed','rolled_back')) %}
+      <div class="panel-body tight">
+        <p class="small" style="margin:0 0 6px">
+          校验未通过：<b>{{ result.filename }}</b> ｜ 结论 <span class="tag err">{{ result.status }}</span>
+          {% if result.detail %}｜{{ result.detail }}{% endif %}
+        </p>
+        {% if result.encoding %}
+        <p class="small muted" style="margin:0">
+          编码探测：{{ result.encoding.encoding or '未识别' }}
+          {% if result.encoding.bom %}（含 BOM）{% endif %}｜前 16 字节 {{ result.encoding.sample_hex or '-' }}
+        </p>
+        {% endif %}
+      </div>
+      {% if result.contract and result.contract.errors %}
+      <div class="table-wrap auto">
+        <table class="dense">
+          <thead><tr><th>契约错误</th><th>说明</th></tr></thead>
+          <tbody>
+            {% for e in result.contract.errors %}
+            <tr><td><code>{{ e.code }}</code></td><td>{{ e.message }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+      <div class="panel-body">
+        {% set report = result.report %}
+        {% include "_error_report.html" %}
+      </div>
+      {% else %}
+      <div class="empty">
+        <strong>本次会话还没有失败的上传</strong>
+        上传一份不合规文件（如 broken.csv）后，这里会按错误类型汇总数量、示例行号与修正建议，并列出逐行依据（行号 = CSV 文件行，表头为第 1 行）。
+      </div>
+      {% endif %}
+    </section>
+  </div>
+</div>
+{% endblock %}

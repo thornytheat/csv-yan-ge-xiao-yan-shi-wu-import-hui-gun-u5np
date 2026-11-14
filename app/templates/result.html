@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% block title %}{{ batch.batch_id if batch else '入库结果' }} · {{ app_name }}{% endblock %}
+{% block crumb %}入库结果{% endblock %}
+{% block meta %}{% if batch %}<span class="dot ok"></span>已入库 · {{ batch.row_count }} 行 · {{ batch.encoding }}{% else %}<span class="dot warn"></span>没有可展示的批次{% endif %}{% endblock %}
+{% block actions %}
+<a class="btn secondary small" href="/workbench">再传一份</a>
+<a class="btn secondary small" href="/review">历史与复核</a>
+{% endblock %}
+
+{% block content %}
+{% if batch %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">入库结果 · {{ batch.batch_id }}</h1>
+    <p class="page-sub">
+      文件 <b>{{ batch.filename }}</b> · 编码 <span class="tag ok">{{ batch.encoding }}</span>
+      {% if batch.bom %}含 UTF-8 BOM（已剥离）{% else %}无 BOM{% endif %} ·
+      入库时间 {{ batch.created_at }} ·
+      <span class="tag ok">已入库</span> 单事务提交，无回滚
+      {% if batch.superseded_by %} · <span class="tag warn">已被 {{ batch.superseded_by }} 替代</span>{% endif %}
+    </p>
+  </div>
+  <div class="page-head-actions">
+    <a class="btn small" href="/workbench">回工作台</a>
+  </div>
+</div>
+
+<div class="kpi-strip">
+  <div class="kpi ok">
+    <div class="k-label">编码探测</div>
+    <div class="k-value" style="font-size:19px">{{ batch.encoding }}</div>
+    <div class="k-note">{% if batch.bom %}含 BOM，已剥离{% else %}无 BOM{% endif %}</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">数据行数</div>
+    <div class="k-value">{{ batch.row_count }}</div>
+    <div class="k-note">文件数据行（不含表头）</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">本次写入</div>
+    <div class="k-value">{{ batch.row_count }}</div>
+    <div class="k-note">
+      {% if rows_before is not none and rows_after is not none %}
+      写入前 {{ rows_before }} → 写入后 {{ rows_after }} 行（+{{ rows_after - rows_before }}）
+      {% else %}库内当前 {{ stats.fact_rows }} 行{% endif %}
+    </div>
+  </div>
+  <div class="kpi ok">
+    <div class="k-label">错误</div>
+    <div class="k-value">0</div>
+    <div class="k-note">整份通过 · 无逐行错误</div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <div class="segmented">
+      <button type="button" data-tab-target="tab-agg" class="active">聚合</button>
+      <button type="button" data-tab-target="tab-evidence">探测证据</button>
+      <button type="button" data-tab-target="tab-detail">明细</button>
+    </div>
+    <div class="panel-actions">
+      <span class="tag">¥{{ batch.total_amount }} · {{ batch.total_qty }} 件</span>
+      <a class="btn secondary small" href="/result/{{ batch.batch_id }}">刷新本页</a>
+    </div>
+  </div>
+
+  <div id="tab-agg" class="tab-panel">
+    <div class="panel-body tight">
+      <h3 style="margin:0">按站点聚合（group by site）</h3>
+      <p class="small muted" style="margin:4px 0 0">聚合来自同一批明细，并与明细累计做过独立口径校验（分组累加 cents / 线性累加 / Decimal 复核）。</p>
+    </div>
+    <div class="table-wrap roomy">
+      <table class="dense">
+        <thead><tr><th>站点</th><th class="num">行数</th><th class="num">金额合计</th><th class="num">件数合计</th><th class="num">笔均金额</th></tr></thead>
+        <tbody>
+          {% for g in batch.aggregates %}
+          <tr>
+            <td>{{ g.site }}</td>
+            <td class="num">{{ g.row_count }}</td>
+            <td class="num">¥{{ g.amount }}</td>
+            <td class="num">{{ g.qty }}</td>
+            <td class="num">{{ (g.amount_cents / g.row_count / 100) | round(2) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+        <tfoot>
+          <tr>
+            <th>合计</th>
+            <th class="num">{{ batch.row_count }}</th>
+            <th class="num">¥{{ batch.total_amount }}</th>
+            <th class="num">{{ batch.total_qty }}</th>
+            <th></th>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+    <div class="panel-body tight">
+      <p class="small" style="margin:0">
+        <span class="tag ok">聚合自检通过</span>
+        组内金额和 = 明细线性累加；组内行数和 = 明细行数；Decimal 原始字符串复核一致。
+      </p>
+    </div>
+  </div>
+
+  <div id="tab-evidence" class="tab-panel" hidden>
+    <div class="table-wrap roomy">
+      <table class="dense">
+        <tbody>
+          <tr><th style="width:180px">批号</th><td><code>{{ batch.batch_id }}</code>
+            {% if batch.forced %}<span class="tag warn">force_new_batch</span>{% endif %}</td></tr>
+          <tr><th>文件名</th><td>{{ batch.filename }}</td></tr>
+          <tr><th>文件 sha256</th><td><code class="mono">{{ batch.sha256 }}</code></td></tr>
+          <tr><th>编码探测</th><td><span class="tag ok">{{ batch.encoding }}</span>
+            {% if batch.bom %}含 UTF-8 BOM（已剥离）{% else %}无 BOM{% endif %}</td></tr>
+          <tr><th>入库时间</th><td>{{ batch.created_at }}</td></tr>
+          {% if batch.superseded_by %}
+          <tr><th>被新批次替代</th><td><a href="/result/{{ batch.superseded_by }}">{{ batch.superseded_by }}</a>
+            <span class="muted small">（同 sha256 的 force_new_batch 重灌）</span></td></tr>
+          {% endif %}
+          <tr><th>明细行数校验</th><td>
+            {% if rows_before is not none and rows_after is not none %}
+            写入前 {{ rows_before }} 行 → 写入后 {{ rows_after }} 行（本次 +{{ rows_after - rows_before }}）
+            {% else %}库内当前 {{ stats.fact_rows }} 行{% endif %}
+          </td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="table-wrap">
+      <table class="dense">
+        <thead><tr><th>#</th><th>文件</th><th>结论</th><th>时间</th><th>说明</th></tr></thead>
+        <tbody>
+          {% for a in attempts %}
+          <tr>
+            <td>{{ a.attempt_id }}</td>
+            <td class="cell-ellipsis">{{ a.filename }}</td>
+            <td>{% if a.status == 'committed' %}<span class="tag ok">已入库</span>
+                {% elif a.status == 'duplicate_file' %}<span class="tag warn">重复文件</span>
+                {% else %}<span class="tag err">{{ a.status }}</span>{% endif %}</td>
+            <td class="small muted nowrap">{{ a.created_at }}</td>
+            <td class="small">{{ a.detail }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="muted">该批次还没有上传记录。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="panel-body tight">
+      <p class="small muted" style="margin:0">该批次的上传记录：committed = 本次写入；duplicate_file = 同 sha256 幂等命中，未重复写库。</p>
+    </div>
+  </div>
+
+  <div id="tab-detail" class="tab-panel" hidden>
+    <div class="table-wrap roomy">
+      <table class="dense">
+        <thead><tr><th class="num">行号</th><th>order_id</th><th>site</th><th>category</th><th>order_date</th><th class="num">amount</th><th class="num">qty</th></tr></thead>
+        <tbody>
+          {% for r in batch.sample_rows %}
+          <tr>
+            <td class="num">{{ r.row_no }}</td>
+            <td>{{ r.order_id }}</td>
+            <td>{{ r.site }}</td>
+            <td>{{ r.category }}</td>
+            <td>{{ r.order_date }}</td>
+            <td class="num">{{ r.amount }}</td>
+            <td class="num">{{ r.qty }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="panel-body tight">
+      <p class="small muted" style="margin:0"><b>明细前 20 行（用于抽验）</b> · 完整明细在 fact_orders 表（volume csvgate-data），只展示前 20 行。</p>
+    </div>
+  </div>
+</div>
+
+{% else %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">入库结果</h1>
+    <p class="page-sub">没有可展示的批次数据。请回工作台重新提交。</p>
+  </div>
+  <div class="page-head-actions"><a class="btn small" href="/workbench">回工作台</a></div>
+</div>
+<div class="panel"><div class="empty">
+  <strong>没有可展示的批次数据</strong>
+  请回 <a href="/workbench">上传与校验</a> 重新提交一份 CSV。
+</div></div>
+{% endif %}
+{% endblock %}

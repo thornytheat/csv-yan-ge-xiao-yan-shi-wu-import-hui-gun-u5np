@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}上传记录 #{{ attempt.attempt_id }} · {{ app_name }}{% endblock %}
+{% block crumb %}上传记录 #{{ attempt.attempt_id }}{% endblock %}
+{% block meta %}<span class="dot err"></span>整体回滚 · {{ report.total }} 处行级错误 · 库内明细未变{% endblock %}
+{% block actions %}
+<a class="btn secondary small" href="/review">回历史与复核</a>
+<a class="btn small" href="/workbench">修正后重新上传</a>
+{% endblock %}
+{% block status_left %}逐行依据来自 import_attempts.errors_json · 行号 = CSV 文件行（表头为第 1 行）{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">校验未通过：{{ attempt.filename }}</h1>
+    <p class="page-sub">上传时间 {{ attempt.created_at }} · 结论 <span class="tag err">{{ attempt.status }}</span> {{ attempt.detail }} ·
+      编码 {{ attempt.encoding or '未识别' }} · 本次未写入任何明细行。</p>
+  </div>
+  <div class="page-head-actions">
+    <a class="btn small" href="/workbench">修正后重新上传</a>
+  </div>
+</div>
+
+<div class="kpi-strip">
+  <div class="kpi err">
+    <div class="k-label">结论</div>
+    <div class="k-value" style="font-size:18px">整体回滚</div>
+    <div class="k-note">未写入任何明细行</div>
+  </div>
+  <div class="kpi err">
+    <div class="k-label">行级错误数</div>
+    <div class="k-value">{{ report.total }}</div>
+    <div class="k-note">同一单元格只报第一个错</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">文件数据行数</div>
+    <div class="k-value">{{ attempt.row_count }}</div>
+    <div class="k-note">含错误行</div>
+  </div>
+  <div class="kpi ok">
+    <div class="k-label">库内明细行数</div>
+    <div class="k-value">{{ stats.fact_rows }}</div>
+    <div class="k-note">本次上传前后一致</div>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>错误报告与逐行依据</h2>
+    <div class="panel-actions"><span class="tag mono">{{ attempt.sha256[:12] }}…</span></div>
+  </div>
+  <div class="table-wrap auto">
+    <table class="dense">
+      <tbody>
+        <tr><th style="width:180px">上传时间</th><td>{{ attempt.created_at }}</td></tr>
+        <tr><th>结论</th><td><span class="tag err">{{ attempt.status }}</span> {{ attempt.detail }}</td></tr>
+        <tr><th>编码探测</th><td><span class="tag">{{ attempt.encoding or '未识别' }}</span></td></tr>
+        <tr><th>文件 sha256</th><td><code class="mono">{{ attempt.sha256 }}</code></td></tr>
+        <tr><th>库内明细行数</th><td>{{ stats.fact_rows }} 行（本次上传前后一致）</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="panel-body">
+    {% include "_error_report.html" %}
+  </div>
+</section>
+{% endblock %}

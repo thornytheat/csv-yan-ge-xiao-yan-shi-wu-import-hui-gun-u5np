@@ -1,0 +1,40 @@
+{# 错误报告区块：需要上下文里的 report（report.build_report 的输出） #}
+{% if report and report.total %}
+<h3 style="margin-top:0">错误报告：共 {{ report.total }} 处</h3>
+<div class="table-wrap">
+  <table class="dense">
+    <thead><tr><th>错误类型</th><th class="num">数量</th><th>示例行号</th><th>修正建议</th></tr></thead>
+    <tbody>
+      {% for b in report.by_code %}
+      <tr>
+        <td><code>{{ b.code }}</code> <span class="muted small">{{ b.label }}</span></td>
+        <td class="num">{{ b.count }}</td>
+        <td class="small">{{ b.examples | join(', ') }}</td>
+        <td class="small">{{ b.advice }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h3>逐行依据（行号 = CSV 文件行，表头为第 1 行）</h3>
+<div class="table-wrap roomy">
+  <table class="dense">
+    <thead><tr><th class="num">行号</th><th>列</th><th>原值</th><th>原因</th><th>类型</th></tr></thead>
+    <tbody>
+      {% for e in report.rows %}
+      <tr>
+        <td><b>{{ e.line_no }}</b><span class="muted small">（数据第 {{ e.row_no }} 行）</span></td>
+        <td>{% if e.column %}<code>{{ e.column }}</code>{% else %}<span class="muted">整行</span>{% endif %}</td>
+        <td class="mono">{{ e.raw if e.raw else '（空）' }}</td>
+        <td>{{ e.reason }}</td>
+        <td><span class="tag err">{{ e.label }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<p class="small muted">{{ report.advice }}</p>
+{% elif report %}
+<p class="small muted">没有行级错误记录。</p>
+{% endif %}
