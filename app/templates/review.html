@@ -34,7 +34,7 @@
   <div class="kpi {% if stats.rejected_attempts %}err{% endif %}">
     <div class="k-label">被拒绝/回滚的上传次数</div>
     <div class="k-value">{{ stats.rejected_attempts }}</div>
-    <div class="k-note">rejected + encoding_failed</div>
+    <div class="k-note">rejected + encoding_failed + rolled_back</div>
   </div>
   <div class="kpi">
     <div class="k-label">本页上传记录</div>
@@ -118,6 +118,9 @@
               <td>
                 {% if a.status == 'committed' %}<span class="tag ok">已入库</span>
                 {% elif a.status == 'duplicate_file' %}<span class="tag warn">重复文件</span>
+                {% elif a.status == 'published' %}<span class="tag ok">日发布</span>
+                {% elif a.status == 'staged' %}<span class="tag warn">待补齐</span>
+                {% elif a.status == 'unchanged' %}<span class="tag">无变化</span>
                 {% elif a.status == 'rolled_back' %}<span class="tag err">事务回滚</span>
                 {% elif a.status == 'rejected' %}<span class="tag err">校验拒绝</span>
                 {% elif a.status == 'encoding_failed' %}<span class="tag err">编码失败</span>

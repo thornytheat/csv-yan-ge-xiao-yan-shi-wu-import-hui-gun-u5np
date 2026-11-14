@@ -13,7 +13,9 @@
 <div class="page-head">
   <div>
     <h1 class="page-title">上传与校验工作台</h1>
-    <p class="page-sub">编码探测 → 表头契约 → 行级校验 → 分组聚合（自证一致）→ 事务导入 → 错误报告；左侧选文件与策略，右侧看契约与结论。</p>
+    <p class="page-sub">编码探测 → 表头契约 → 行级校验 → 分组聚合（自证一致）→ 写入 → 错误报告。
+      只含<b>一个站点、一天</b>的文件自动进入<a href="/days">按日发布</a>：先暂存为快照，站点齐全才切换当日明细与汇总；
+      其余文件按旧口径「一份文件 = 一个批次」导入。</p>
   </div>
 </div>
 
@@ -194,18 +196,22 @@
 
     <section class="panel" id="m5">
       <div class="panel-head">
-        <h2>事务导入</h2>
-        <div class="panel-actions"><span class="tag">模块 5 · 1 份 = 1 事务</span></div>
+        <h2>写入与发布</h2>
+        <div class="panel-actions"><span class="tag">模块 5 · 单站单日 → 按日发布；其余 → 单文件批次</span></div>
       </div>
       <div class="table-wrap auto">
         <table class="dense">
           <thead><tr><th>场景</th><th>结论</th><th>库内影响</th></tr></thead>
           <tbody>
-            <tr><td>全部行通过</td><td><span class="tag ok">committed</span></td><td class="small">一个事务写批次 + 明细 + 聚合</td></tr>
-            <tr><td>任一行非法</td><td><span class="tag err">rolled_back</span></td><td class="small">整份回滚，明细行数不变</td></tr>
-            <tr><td>同 sha256 已入库</td><td><span class="tag warn">duplicate_file</span></td><td class="small">不写库，返回既有批次</td></tr>
-            <tr><td>勾选 force_new_batch</td><td><span class="tag warn">forced</span></td><td class="small">新建批次，旧批次标记 superseded_by</td></tr>
-            <tr><td>编码无法解码</td><td><span class="tag err">encoding_failed</span></td><td class="small">不进入行校验，给前 16 字节建议</td></tr>
+            <tr><td>单站单日文件，站点未齐</td><td><span class="tag warn">staged</span></td><td class="small">暂存不可变快照；当前结果不变</td></tr>
+            <tr><td>最后一份站点文件到齐</td><td><span class="tag ok">published</span></td><td class="small">同一事务切换当日明细 + 站点汇总</td></tr>
+            <tr><td>单站重发（内容变化）</td><td><span class="tag ok">published</span></td><td class="small">新版本只替换该站，旧版本保留可查</td></tr>
+            <tr><td>重试同一份文件</td><td><span class="tag">unchanged</span></td><td class="small">不新增快照、不新增版本</td></tr>
+            <tr><td>任一行非法 / 编码失败</td><td><span class="tag err">rejected</span></td><td class="small">不写快照，上一版继续生效</td></tr>
+            <tr><td>发布过程异常</td><td><span class="tag err">rolled_back</span></td><td class="small">整体回滚，上一版继续生效</td></tr>
+            <tr><td>多站 / 多天文件</td><td><span class="tag warn">legacy</span></td><td class="small">按旧口径一个批次入库（单事务）</td></tr>
+            <tr><td>同 sha256 已入库（旧口径）</td><td><span class="tag warn">duplicate_file</span></td><td class="small">不写库，返回既有批次</td></tr>
+            <tr><td>勾选 force_new_batch（旧口径）</td><td><span class="tag warn">forced</span></td><td class="small">新建批次，旧批次标记 superseded_by</td></tr>
           </tbody>
         </table>
       </div>

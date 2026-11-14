@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}{{ business_date }} · v{{ version.version_no }} · 按日发布{% endblock %}
+{% block crumb %}按日发布 / {{ business_date }} / v{{ version.version_no }}{% endblock %}
+{% block meta %}
+{% if version.is_current %}<span class="dot ok"></span>这是当前生效版本
+{% else %}<span class="dot warn"></span>历史版本 · 已被更新版本替代{% endif %}
+{% endblock %}
+{% block actions %}
+<a class="btn secondary small" href="/days/{{ business_date }}">回该日期</a>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">{{ business_date }} · 版本 v{{ version.version_no }}</h1>
+    <p class="page-sub">
+      {% if version.is_current %}
+      <span class="tag ok">当前生效</span>
+      {% else %}
+      <span class="tag warn">历史版本</span> 只读；当前生效版本为
+      {% if summary %}v{{ summary.version_no }}{% else %}无{% endif %}。
+      {% endif %}
+      发布时间 {{ version.published_at or version.created_at }} · {{ version.reason }}
+    </p>
+  </div>
+</div>
+
+<div class="kpi-strip">
+  <div class="kpi">
+    <div class="k-label">站点</div>
+    <div class="k-value">{{ version.sites|length }}</div>
+    <div class="k-note">{{ version.sites | map(attribute='site') | join(' / ') }}</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">明细行数</div>
+    <div class="k-value">{{ version.row_count }}</div>
+    <div class="k-note">该版本引用快照的明细行</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">金额合计</div>
+    <div class="k-value" style="font-size:19px">¥{{ version.total_amount }}</div>
+    <div class="k-note">{{ version.total_qty }} 件</div>
+  </div>
+  <div class="kpi {% if version.is_current %}ok{% else %}warn{% endif %}">
+    <div class="k-label">状态</div>
+    <div class="k-value" style="font-size:18px">{% if version.is_current %}当前{% else %}历史{% endif %}</div>
+    <div class="k-note">旧版本永久保留，供回查与对账</div>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>站点快照与汇总</h2>
+    <div class="panel-actions"><span class="tag">每个站点引用一份不可变快照</span></div>
+  </div>
+  <div class="table-wrap roomy">
+    <table class="dense">
+      <thead><tr><th>站点</th><th>文件</th><th>编码</th><th class="num">行数</th><th class="num">金额合计</th><th class="num">件数</th><th>快照时间</th></tr></thead>
+      <tbody>
+        {% for s in version.sites %}
+        <tr>
+          <td>{{ s.site }}</td>
+          <td class="cell-ellipsis small">{{ s.filename }} <span class="muted">#{{ s.upload_id }}</span></td>
+          <td><span class="tag">{{ s.encoding }}</span>{% if s.bom %} BOM{% endif %}</td>
+          <td class="num">{{ s.row_count }}</td>
+          <td class="num">¥{{ s.amount }}</td>
+          <td class="num">{{ s.qty }}</td>
+          <td class="small muted nowrap">{{ s.snapshot_created_at }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <th>合计</th><th></th><th></th>
+          <th class="num">{{ version.row_count }}</th>
+          <th class="num">¥{{ version.total_amount }}</th>
+          <th class="num">{{ version.total_qty }}</th><th></th>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</section>
+
+{% for s in version.sites %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>{{ s.site }} · 明细前 {{ s.sample_rows|length }} 行</h2>
+    <div class="panel-actions"><span class="tag">upload #{{ s.upload_id }}</span></div>
+  </div>
+  <div class="table-wrap">
+    <table class="dense">
+      <thead><tr><th class="num">行号</th><th>order_id</th><th>category</th><th>order_date</th><th class="num">amount</th><th class="num">qty</th><th>memo</th></tr></thead>
+      <tbody>
+        {% for r in s.sample_rows %}
+        <tr>
+          <td class="num">{{ r.row_no }}</td>
+          <td>{{ r.order_id }}</td>
+          <td>{{ r.category }}</td>
+          <td>{{ r.order_date }}</td>
+          <td class="num">¥{{ r.amount }}</td>
+          <td class="num">{{ r.qty }}</td>
+          <td class="small muted">{{ r.memo or '' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="panel-body tight">
+    <p class="small muted" style="margin:0">sha256 <code class="mono">{{ s.sha256 }}</code>（该快照内容不可变）</p>
+  </div>
+</section>
+{% endfor %}
+{% endblock %}

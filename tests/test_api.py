@@ -9,7 +9,7 @@ SIX_CODES = {"duplicate", "out_of_order", "date_invalid", "length", "enum"}
 
 
 def upload(client, path, name, **form):
-    data = {"extra_policy": "reject", **form}
+    data = {"extra_policy": "reject", "mode": "legacy", **form}
     return client.post("/api/import", files={"file": (name, path.read_bytes(), "text/csv")}, data=data)
 
 
@@ -23,7 +23,8 @@ def test_health_and_seed(client):
 
 
 def test_pages_render(client):
-    for path, needle in [("/", "上游每天的 CSV"), ("/workbench", "表头自检"), ("/review", "上传记录")]:
+    for path, needle in [("/", "按日发布"), ("/days", "发布单元"),
+                         ("/workbench", "表头自检"), ("/review", "上传记录")]:
         res = client.get(path)
         assert res.status_code == 200, path
         assert needle in res.text, path
@@ -105,7 +106,8 @@ def test_gbk_upload_uses_gb18030(client, sample_dir):
 
 def test_illegal_encoding_returns_400_with_suggestion(client):
     files = {"file": ("broken_encoding.csv", b"site,category\n\x80\x81\xff\xfe,x\n", "text/csv")}
-    res = client.post("/api/import", files=files, data={"extra_policy": "reject"})
+    res = client.post("/api/import",
+                      files=files, data={"extra_policy": "reject", "mode": "legacy"})
     assert res.status_code == 400
     body = res.json()
     assert body["status"] == "encoding_failed"
@@ -119,13 +121,13 @@ def test_extra_column_policy_reject_and_warn(client):
     raw = text.encode("utf-8")
 
     rejected = client.post("/api/import", files={"file": ("extra.csv", raw, "text/csv")},
-                           data={"extra_policy": "reject"})
+                           data={"extra_policy": "reject", "mode": "legacy"})
     assert rejected.status_code == 422
     assert rejected.json()["stage"] == "contract"
     assert [e["code"] for e in rejected.json()["contract"]["errors"]] == ["extra_column"]
 
     warned = client.post("/api/import", files={"file": ("extra.csv", raw, "text/csv")},
-                         data={"extra_policy": "warn"})
+                         data={"extra_policy": "warn", "mode": "legacy"})
     assert warned.status_code == 200
     body = warned.json()
     assert body["status"] == "committed"

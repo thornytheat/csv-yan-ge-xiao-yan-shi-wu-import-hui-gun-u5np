@@ -6,6 +6,9 @@
 - seed_20261107.csv : 历史周批次，60 行（启动时幂等 seed 用）
 - broken.csv     : 5 类错误各 1 条，其余行合法
 - contract.json  : 列契约
+- day_20261108_<site>.csv      : 按日发布演示，6 个站点各一份，构成完整的 2026-11-08
+- pending_20261109_<site>.csv  : 2026-11-09 的 6 个站点；seed 只导入 2 站，演示「未补齐不可见 / 补齐后发布」
+- resend_20261108_beijing.csv  : 2026-11-08 北京站的单站重发版本（金额整体上调），演示只替换该站
 
 CSV 一律 \n 换行、无引号包裹（字段不含逗号/引号），行号与文件行可直接对应。
 """
@@ -83,6 +86,23 @@ def write_csv(path: Path, header: list[str], data: list[list[str]], encoding: st
     path.write_bytes(text.encode(encoding))
 
 
+def day_rows(site: str, day: date, count: int, start_id: int,
+             amount_bonus: int = 0) -> list[list[str]]:
+    """按日发布演示：同一站、同一天、主键严格递增。"""
+    out = []
+    for i in range(count):
+        cents = 1500 + (i * 173 + start_id) % 500000 + amount_bonus
+        out.append([
+            site,
+            CATEGORIES[(i + start_id) % len(CATEGORIES)],
+            str(start_id + i),
+            day.isoformat(),
+            f"{cents // 100}.{cents % 100:02d}",
+            str(1 + (i * 11) % 7),
+        ])
+    return out
+
+
 def broken_rows() -> list[list[str]]:
     """5 类错误各 1 条，其余行合法；错误行之间不互相传染主键基线。"""
     base = 900001
@@ -123,6 +143,18 @@ def main() -> None:
     write_csv(HERE / "seed_20261107.csv", HEADER,
               rows(60, 700001, date(2026, 10, 26), 7, memo=False), "utf-8")
     write_csv(HERE / "broken.csv", HEADER, broken_rows(), "utf-8")
+
+    # 按日发布演示：完整的一天（6 站各 40 行）与待补齐的一天（6 站各 25 行，
+    # seed 只导入其中北京/上海两站，其余 4 站留给演示「补齐后发布」）
+    for idx, site in enumerate(SITES):
+        write_csv(HERE / f"day_20261108_{site}.csv", HEADER,
+                  day_rows(site, date(2026, 11, 8), 40, 300001 + idx * 1000), "utf-8")
+        write_csv(HERE / f"pending_20261109_{site}.csv", HEADER,
+                  day_rows(site, date(2026, 11, 9), 25, 400001 + idx * 1000), "utf-8")
+    # 单站重发演示：同一天、同一站，金额整体变化
+    write_csv(HERE / "resend_20261108_beijing.csv", HEADER,
+              day_rows("beijing", date(2026, 11, 8), 40, 300001, amount_bonus=500000), "utf-8")
+
     (HERE / "contract.json").write_text(
         json.dumps(CONTRACT, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 

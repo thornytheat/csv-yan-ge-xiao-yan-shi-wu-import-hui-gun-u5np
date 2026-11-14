@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% block title %}{{ business_date }} · 按日发布{% endblock %}
+{% block crumb %}按日发布 / {{ business_date }}{% endblock %}
+{% block meta %}
+{% if summary %}<span class="dot ok"></span>已发布 v{{ summary.version_no }} · {{ summary.site_count }} 站 · {{ summary.row_count }} 行
+{% else %}<span class="dot warn"></span>未发布 · 站点不齐，不进入当前结果{% endif %}
+{% endblock %}
+{% block actions %}
+<a class="btn secondary small" href="/days">全部日期</a>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">业务日期 {{ business_date }}</h1>
+    <p class="page-sub">
+      {% if summary %}
+      当前生效版本 <span class="tag ok">v{{ summary.version_no }}</span>（{{ summary.published_at }}）。
+      明细与站点汇总同属该版本。
+      {% else %}
+      该日期还没有完整发布：站点未齐或全部校验尚未通过，当前结果不包含这一天。
+      {% endif %}
+    </p>
+  </div>
+</div>
+
+{% if pending and not summary %}
+<div class="alert alert-info">
+  待补齐：已到 {{ pending.staged_sites | join(' / ') or '无' }}；
+  缺失 <b>{{ pending.missing_sites | join(' / ') }}</b>。补齐前不会影响任何日汇总。
+</div>
+{% endif %}
+{% if pending and summary %}
+<div class="alert alert-info">
+  该日期有未发布的站点快照：已到 {{ pending.staged_sites | join(' / ') }}；
+  缺失 <b>{{ pending.missing_sites | join(' / ') }}</b>。当前展示的仍是最近一次完整发布的 v{{ summary.version_no }}。
+</div>
+{% endif %}
+
+<div class="kpi-strip">
+  <div class="kpi {% if summary %}ok{% endif %}">
+    <div class="k-label">当前版本</div>
+    <div class="k-value" style="font-size:19px">{% if summary %}v{{ summary.version_no }}{% else %}未发布{% endif %}</div>
+    <div class="k-note">current_days 指针</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">站点 / 行数</div>
+    <div class="k-value" style="font-size:19px">{{ summary.site_count if summary else 0 }} / {{ summary.row_count if summary else 0 }}</div>
+    <div class="k-note">同版本内明细与汇总一致</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">金额合计</div>
+    <div class="k-value" style="font-size:19px">¥{{ summary.total_amount if summary else '—' }}</div>
+    <div class="k-note">{{ summary.total_qty if summary else 0 }} 件</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">历史版本</div>
+    <div class="k-value">{{ versions|length }}</div>
+    <div class="k-note">旧版永不删除，可按版本号回查</div>
+  </div>
+</div>
+
+{% if summary %}
+<section class="panel">
+  <div class="panel-head">
+    <h2>当前站点汇总（v{{ summary.version_no }}）</h2>
+    <div class="panel-actions"><span class="tag">按 site 分组</span></div>
+  </div>
+  <div class="table-wrap roomy">
+    <table class="dense">
+      <thead><tr><th>站点</th><th class="num">行数</th><th class="num">金额合计</th><th class="num">件数合计</th></tr></thead>
+      <tbody>
+        {% for s in summary.sites %}
+        <tr>
+          <td>{{ s.site }}</td>
+          <td class="num">{{ s.row_count }}</td>
+          <td class="num">¥{{ s.amount }}</td>
+          <td class="num">{{ s.qty }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <th>合计</th>
+          <th class="num">{{ summary.row_count }}</th>
+          <th class="num">¥{{ summary.total_amount }}</th>
+          <th class="num">{{ summary.total_qty }}</th>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</section>
+{% endif %}
+
+<div class="split wide-left">
+  <section class="panel">
+    <div class="panel-head">
+      <h2>版本历史</h2>
+      <div class="panel-actions"><span class="tag">{{ versions|length }} 个版本</span></div>
+    </div>
+    <div class="table-wrap roomy">
+      <table class="dense">
+        <thead><tr><th class="num">版本</th><th>状态</th><th>站点</th><th>原因</th><th>发布时间</th><th></th></tr></thead>
+        <tbody>
+          {% for v in versions %}
+          <tr>
+            <td class="num"><b>v{{ v.version_no }}</b>{% if v.is_current %} <span class="tag ok">当前</span>{% endif %}</td>
+            <td><span class="tag {% if v.status == 'published' %}ok{% else %}warn{% endif %}">{{ v.status }}</span></td>
+            <td class="small">{{ v.sites | join(' / ') }}</td>
+            <td class="small muted">{{ v.reason }}</td>
+            <td class="small muted nowrap">{{ v.published_at or v.created_at }}</td>
+            <td class="small nowrap"><a href="/days/{{ business_date }}/v/{{ v.version_no }}">看该版本</a></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="muted">还没有发布版本。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="panel-body tight">
+      <p class="small muted" style="margin:0">
+        单站重发会生成新版本，只替换该站；其余站点沿用上一版快照。同一份文件重试不会新增版本。
+      </p>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>相关上传记录</h2>
+      <div class="panel-actions"><a class="btn secondary small" href="/review">全部记录</a></div>
+    </div>
+    <div class="table-wrap roomy">
+      <table class="dense">
+        <thead><tr><th>#</th><th>文件</th><th>结论</th><th>说明</th><th>时间</th></tr></thead>
+        <tbody>
+          {% for a in attempts %}
+          <tr>
+            <td>{{ a.attempt_id }}</td>
+            <td class="cell-ellipsis">{{ a.filename }}</td>
+            <td>
+              {% if a.status == 'published' %}<span class="tag ok">已发布</span>
+              {% elif a.status == 'staged' %}<span class="tag warn">已暂存</span>
+              {% elif a.status == 'unchanged' %}<span class="tag">无变化</span>
+              {% elif a.status == 'rejected' or a.status == 'encoding_failed' %}<span class="tag err">{{ a.status }}</span>
+              {% else %}<span class="tag">{{ a.status }}</span>{% endif %}
+            </td>
+            <td class="small">{{ a.detail }}</td>
+            <td class="small muted nowrap">{{ a.created_at }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="muted">没有该日期的上传记录。</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+{% endblock %}

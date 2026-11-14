@@ -11,35 +11,87 @@
 <div class="page-head">
   <div>
     <h1 class="page-title">总览</h1>
-    <p class="page-sub">上游每天的站点订单 CSV：全对才入库，任一行非法整份回滚；同一份文件按 sha256 幂等，不重复写库。</p>
+    <p class="page-sub">上游按站点分批给当天的订单 CSV：一天的各站文件共同构成一个发布单元，站点齐全后才切换当日明细与站点汇总；
+      单站重发只替换该站、旧版可查。旧口径「一份文件 = 一个批次」仍保留：全对才入库，任一行非法整份回滚。</p>
   </div>
   <div class="page-head-actions">
-    <a class="btn small" href="/workbench">去工作台</a>
+    <a class="btn small" href="/days">按日发布</a>
+    <a class="btn secondary small" href="/workbench">去工作台</a>
   </div>
 </div>
 
 <div class="kpi-strip">
+  <div class="kpi ok">
+    <div class="k-label">已发布日期</div>
+    <div class="k-value">{{ current_days|length }}</div>
+    <div class="k-note">站点齐全、已原子切换</div>
+  </div>
+  <div class="kpi {% if pending_days %}warn{% endif %}">
+    <div class="k-label">待补齐日期</div>
+    <div class="k-value">{{ pending_days|length }}</div>
+    <div class="k-note">有站点快照，但不进当前结果</div>
+  </div>
   <div class="kpi">
     <div class="k-label">累计批次</div>
     <div class="k-value">{{ stats.batches }}</div>
-    <div class="k-note">batches 表（含 seed 历史批次）</div>
-  </div>
-  <div class="kpi ok">
-    <div class="k-label">累计行数</div>
-    <div class="k-value">{{ stats.fact_rows }}</div>
-    <div class="k-note">fact_orders 明细 · {{ stats.sites }} 个站点</div>
+    <div class="k-note">旧口径单文件批次（含 seed 历史批次）</div>
   </div>
   <div class="kpi">
-    <div class="k-label">最近入库</div>
-    <div class="k-value" style="font-size:16px">{{ recent_batches[0].created_at[:10] if recent_batches else '—' }}</div>
-    <div class="k-note">{% if recent_batches %}<code>{{ recent_batches[0].batch_id }}</code> · {{ recent_batches[0].filename }}{% else %}还没有批次{% endif %}</div>
-  </div>
-  <div class="kpi {% if stats.rejected_attempts %}err{% endif %}">
     <div class="k-label">回滚次数</div>
     <div class="k-value">{{ stats.rejected_attempts }}</div>
     <div class="k-note">被拒绝 / 编码失败的上传</div>
   </div>
 </div>
+
+<section class="panel">
+  <div class="panel-head">
+    <h2>按日发布状态</h2>
+    <div class="panel-actions">
+      <span class="tag ok">当前 {{ current_days|length }} 天</span>
+      <span class="tag warn">待补齐 {{ pending_days|length }} 天</span>
+      <a class="btn secondary small" href="/days">全部</a>
+    </div>
+  </div>
+  <div class="table-wrap roomy">
+    <table class="dense">
+      <thead><tr><th>业务日期</th><th>状态</th><th class="num">版本</th><th>已到站点</th><th>缺失站点</th><th class="num">行数</th><th class="num">金额合计</th><th></th></tr></thead>
+      <tbody>
+        {% for d in current_days %}
+        <tr>
+          <td class="nowrap"><a href="/days/{{ d.business_date }}">{{ d.business_date }}</a></td>
+          <td><span class="tag ok">已发布</span></td>
+          <td class="num">v{{ d.version_no }}</td>
+          <td class="small">{{ d.sites | map(attribute='site') | join(' / ') }}</td>
+          <td class="small muted">—</td>
+          <td class="num">{{ d.row_count }}</td>
+          <td class="num">¥{{ d.total_amount }}</td>
+          <td class="small"><a href="/days/{{ d.business_date }}">看当天</a></td>
+        </tr>
+        {% endfor %}
+        {% for d in pending_days %}
+        <tr>
+          <td class="nowrap"><a href="/days/{{ d.business_date }}">{{ d.business_date }}</a></td>
+          <td><span class="tag warn">待补齐</span></td>
+          <td class="num muted">未发布</td>
+          <td class="small">{{ d.staged_sites | join(' / ') or '无' }}</td>
+          <td class="small"><span class="tag err">{{ d.missing_sites | join(' / ') }}</span></td>
+          <td class="num muted">—</td>
+          <td class="num muted">—</td>
+          <td class="small"><a href="/days/{{ d.business_date }}">看缺站</a></td>
+        </tr>
+        {% endfor %}
+        {% if not current_days and not pending_days %}
+        <tr><td colspan="8" class="muted">还没有按日发布记录，去 <a href="/days">按日发布</a> 传一份站点文件。</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+  <div class="panel-body tight">
+    <p class="small muted" style="margin:0">
+      待补齐日期只保存了已校验的站点快照，不会计入任何日汇总；补齐最后一批站点后才一次性切换。
+    </p>
+  </div>
+</section>
 
 <section class="panel">
   <div class="panel-head">
@@ -91,6 +143,9 @@
               <td>
                 {% if a.status == 'committed' %}<span class="tag ok">已入库</span>
                 {% elif a.status == 'duplicate_file' %}<span class="tag warn">重复文件</span>
+                {% elif a.status == 'published' %}<span class="tag ok">日发布</span>
+                {% elif a.status == 'staged' %}<span class="tag warn">待补齐</span>
+                {% elif a.status == 'unchanged' %}<span class="tag">无变化</span>
                 {% elif a.status == 'rolled_back' %}<span class="tag err">已回滚</span>
                 {% else %}<span class="tag err">{{ a.status }}</span>{% endif %}
               </td>
@@ -113,7 +168,7 @@
     <section class="panel">
       <div class="panel-head">
         <h2>快捷操作</h2>
-        <div class="panel-actions"><span class="tag">4 步主流程</span></div>
+        <div class="panel-actions"><span class="tag">主流程 · 按日发布</span></div>
       </div>
       <div class="panel-body tight">
         <p style="margin-top:2px">
@@ -124,9 +179,10 @@
           <a class="btn secondary small" href="/review">看历史与复核</a>
         </p>
         <ul class="list small" style="margin-bottom:0">
-          <li><b>1 份 = 1 事务</b>：任一行非法 → 整份回滚，明细行数不变。</li>
-          <li><b>行号 + 列名</b>：每处错误都给文件行号、列名、原值、原因。</li>
-          <li><b>sha256 幂等</b>：同一份文件重传不再写库，除非显式覆盖。</li>
+          <li><b>一天 = 一个发布单元</b>：站点齐全且全部通过，才一次性切换当日明细与汇总。</li>
+          <li><b>单站重发只替换该站</b>：旧版本永久保留，可按版本号回查；重试同一份不新增版本。</li>
+          <li><b>未补齐日期不可见</b>：只有已到站点被暂存，不进入任何日汇总。</li>
+          <li><b>旧口径兼容</b>：多站/多天文件仍按「1 份 = 1 事务」批次入库。</li>
         </ul>
       </div>
       <div class="panel-actions">
@@ -138,22 +194,30 @@
     <details class="help" style="margin-top:12px">
       <summary>业务背景、演示步骤、样例数据与列契约</summary>
       <p class="small" style="margin-top:6px">
-        使用者：数据平台组入库值班同学。上游每天早上通过邮件/共享盘给一份站点订单 CSV，
-        要求「全对才入库」。过去靠手工开表看：编码乱了、表头列名被改、主键有重复、
-        日期写成 2026-02-30、金额带千分位——一人一天要花 40 分钟翻表，
-        而且一旦先写了一半才发现第 300 行有错，库里的数据就脏了。
+        使用者：数据平台组入库值班同学。上游按站点分批送来当天的订单 CSV（同一站点会重发、内容可能变化），
+        要求「站点齐全且全部校验通过才切换当日结果」。过去靠手工开表看：编码乱了、表头列名被改、
+        主键有重复、日期写成 2026-02-30、金额带千分位；更麻烦的是文件一到就写库，
+        站点不齐时日汇总提前变化，重传还会把同一订单再次累计。
       </p>
       <p class="small muted">
-        <b>上游每天的 CSV，要么整份入库，要么整份退回</b>：本系统替代「人肉翻表 + 手工导入」这一段，
-        输出给入库值班同学（上传即得结论）和复核岗（看历史批次与回滚依据）。
+        <b>一天内各站文件 = 一个发布单元</b>：先暂存不可变快照，站点齐全且全部通过后一次性切换明细与汇总；
+        单站重发只替换该站，旧版本永久保留可查；失败重试保留上一版，同一份重试不新增版本。
+        旧口径「一份文件 = 一个批次」作为兼容路径继续可用。
       </p>
 
-      <h3>演示步骤（4 步走完主流程）</h3>
+      <h3>演示步骤（按日发布单元）</h3>
       <ol class="list small">
-        <li>在<a href="/workbench">上传校验</a>页下载 <b>normal_500.csv</b>，直接上传 → 结论「已入库」，得批号与站点聚合表。</li>
-        <li>上传 <b>broken.csv</b> → 结论「整体回滚」，页面列出 5 条逐行错误（行号/列/原值/原因）。</li>
+        <li>打开<a href="/days">按日发布</a>：2026-11-08 已发布 v1（6 站）；2026-11-09 待补齐（只到北京、上海），不进当前结果。</li>
+        <li>补齐 2026-11-09 的 4 个缺失站点 → 前 3 个 202 暂存，最后 1 个到齐后一次性切换当天版本。</li>
+        <li>上传 <b>resend_20261108_beijing.csv</b> → v2，只替换北京；<a href="/days/2026-11-08/v/1">v1</a> 旧版仍可查。</li>
+        <li>同一份再传一次 → unchanged，不新增版本。</li>
+      </ol>
+      <h3>演示步骤（旧口径单文件批次）</h3>
+      <ol class="list small">
+        <li>在<a href="/workbench">上传校验</a>页下载 <b>normal_500.csv</b>，直接上传 → 旧口径批次「已入库」。</li>
+        <li>上传 <b>broken.csv</b> → 「整体回滚」，列出 5 条逐行错误（行号/列/原值/原因）。</li>
         <li>上传 <b>gbk_120.csv</b> → 编码探测显示 GB18030 解码成功，120 行入库。</li>
-        <li>再上传一次 <b>normal_500.csv</b> → 返回 duplicate_file，库内行数不变；看<a href="/review">历史与复核</a>页的复核与重复导入验证。</li>
+        <li>再上传一次 <b>normal_500.csv</b> → duplicate_file，库内行数不变。</li>
       </ol>
       <p class="small muted">
         想验证「回滚后行数不变」：先记下状态条上的「明细 N 行」，上传 broken.csv 后刷新，N 不变。

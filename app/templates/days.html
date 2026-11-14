@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}按日发布 · {{ app_name }}{% endblock %}
+{% block crumb %}按日发布{% endblock %}
+{% block meta %}
+<span class="dot {% if pending_days %}warn{% else %}ok{% endif %}"></span>
+已发布 {{ current_days|length }} 天 · 待补齐 {{ pending_days|length }} 天
+{% endblock %}
+{% block actions %}
+<a class="btn secondary small" href="/api/days">JSON 视图</a>
+<a class="btn small" href="/workbench">旧口径单文件导入</a>
+{% endblock %}
+{% block status_left %}一天 = 一个发布单元：站点齐全且全部通过后才切换；单站重发只替换该站{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 class="page-title">按日发布</h1>
+    <p class="page-sub">
+      上游按站点分批送来当天的订单 CSV。系统把「同一天的各站文件」当作一个发布单元：
+      站点齐全、且每份文件都通过编码/契约/行校验后，才在一次事务里切换当日的
+      订单明细与站点汇总。未补齐的日期不会出现在当前结果里。
+    </p>
+  </div>
+</div>
+
+{% if result and result.status in ('rejected', 'encoding_failed') %}
+<div class="panel">
+  <div class="panel-body">
+    <p class="small" style="margin:0 0 6px">
+      未通过：<b>{{ result.filename }}</b> ｜
+      {% if result.business_date %}{{ result.business_date }} · {{ result.site }} ｜{% endif %}
+      结论 <span class="tag err">{{ result.status }}</span>
+    </p>
+    <p class="small muted" style="margin:0">
+      本次未写入任何快照，当前结果与上一版保持不变。
+    </p>
+  </div>
+  {% if result.contract and result.contract.errors %}
+  <div class="table-wrap auto">
+    <table class="dense">
+      <thead><tr><th>契约错误</th><th>说明</th></tr></thead>
+      <tbody>
+        {% for e in result.contract.errors %}
+        <tr><td><code>{{ e.code }}</code></td><td>{{ e.message }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+  <div class="panel-body">
+    {% set report = result.report %}
+    {% include "_error_report.html" %}
+  </div>
+</div>
+{% endif %}
+
+<div class="kpi-strip">
+  <div class="kpi ok">
+    <div class="k-label">当前已发布</div>
+    <div class="k-value">{{ current_days|length }}</div>
+    <div class="k-note">current_days 中的日期（站点齐全）</div>
+  </div>
+  <div class="kpi {% if pending_days %}warn{% endif %}">
+    <div class="k-label">待补齐</div>
+    <div class="k-value">{{ pending_days|length }}</div>
+    <div class="k-note">有快照但站点不齐，不进当前结果</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">必需站点</div>
+    <div class="k-value">{{ expected_sites|length }}</div>
+    <div class="k-note">{{ expected_sites | join(' / ') }}</div>
+  </div>
+  <div class="kpi">
+    <div class="k-label">库内明细</div>
+    <div class="k-value">{{ stats.fact_rows }}</div>
+    <div class="k-note">旧口径批次明细（按日发布走版本表）</div>
+  </div>
+</div>
+
+<div class="split">
+  <div>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>当前结果（已发布日期）</h2>
+        <div class="panel-actions"><span class="tag">{{ current_days|length }} 天</span></div>
+      </div>
+      <div class="table-wrap roomy">
+        <table class="dense">
+          <thead><tr><th>业务日期</th><th class="num">版本</th><th class="num">站点</th><th class="num">行数</th><th class="num">金额合计</th><th class="num">件数</th><th>发布时间</th></tr></thead>
+          <tbody>
+          {% for d in current_days %}
+            <tr>
+              <td class="nowrap"><a href="/days/{{ d.business_date }}">{{ d.business_date }}</a></td>
+              <td class="num"><span class="tag ok">v{{ d.version_no }}</span></td>
+              <td class="num">{{ d.site_count }}</td>
+              <td class="num">{{ d.row_count }}</td>
+              <td class="num">¥{{ d.total_amount }}</td>
+              <td class="num">{{ d.total_qty }}</td>
+              <td class="small muted nowrap">{{ d.published_at }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="7" class="muted">还没有已发布的日期。</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="panel-body tight">
+        <p class="small muted" style="margin:0">
+          汇总只由 <code>current_days</code> 指向的版本派生：明细和站点汇总同属一个版本，
+          不存在「汇总先变、明细没变」的中间态。
+        </p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>待补齐日期（不进入当前结果）</h2>
+        <div class="panel-actions"><span class="tag warn">{{ pending_days|length }} 天</span></div>
+      </div>
+      <div class="table-wrap roomy">
+        <table class="dense">
+          <thead><tr><th>业务日期</th><th>已到站点</th><th>缺失站点</th><th class="num">快照数</th></tr></thead>
+          <tbody>
+          {% for d in pending_days %}
+            <tr>
+              <td class="nowrap"><a href="/days/{{ d.business_date }}">{{ d.business_date }}</a></td>
+              <td class="small">{{ d.staged_sites | join(' / ') }}</td>
+              <td class="small"><span class="tag err">{{ d.missing_sites | join(' / ') }}</span></td>
+              <td class="num">{{ d.snapshot_count }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="4" class="muted">没有待补齐的日期。</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="panel-body tight">
+        <p class="small muted" style="margin:0">
+          已到的站点文件已完成校验并暂存为不可变快照，但该日期不会出现在日汇总里，直到全部站点到齐。
+        </p>
+      </div>
+    </section>
+  </div>
+
+  <div>
+    <section class="panel pane-sticky">
+      <div class="panel-head">
+        <h2>上传站点日文件</h2>
+        <div class="panel-actions"><span class="tag">单站 · 单日</span></div>
+      </div>
+      <div class="panel-body">
+        <form id="day-upload-form" method="post" action="/days/upload" enctype="multipart/form-data">
+          <div class="field">
+            <label for="day-file">CSV 文件（每份只含一个站点、一天的数据）</label>
+            <input type="file" id="day-file" name="file" accept=".csv,text/csv" required>
+          </div>
+          <div class="field">
+            <label for="day-extra-policy">契约外列策略</label>
+            <select id="day-extra-policy" name="extra_policy">
+              <option value="reject">reject（默认）：契约外列拒绝整份</option>
+              <option value="warn">warn：忽略契约外列</option>
+            </select>
+          </div>
+          <details class="help">
+            <summary>演示文件（2026-11-08 的 6 站；2026-11-09 只有 2 站）</summary>
+            <ul class="list small" style="margin:6px 0 0">
+              {% for s in day_samples %}
+              <li><a href="/api/samples/{{ s.name }}">{{ s.name }}</a> —— {{ s.title }}</li>
+              {% endfor %}
+            </ul>
+          </details>
+        </form>
+      </div>
+      <div class="panel-actions">
+        <button type="submit" id="day-submit-btn" form="day-upload-form">校验并提交站点文件</button>
+        <span class="small muted">站点齐 → 立即切换；不齐 → 暂存待补齐。</span>
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

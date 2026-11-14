@@ -2,10 +2,19 @@
 
 表：
 - meta(key,value)                  seed 版本
-- batches(...)                     已入库批次，sha256 用于重复文件判定
-- fact_orders(...)                 明细事实，仅 committed 批次写入
-- batch_aggregates(...)            按 site 聚合快照
+- batches(...)                     旧口径多日批次，sha256 用于重复文件判定
+- fact_orders(...)                 旧口径明细事实，仅 committed 批次写入
+- batch_aggregates(...)            旧口径按 site 聚合快照
 - import_attempts(...)             每次上传的结论（含回滚记录）/review 用
+- site_uploads(...)                按日发布：单个 (日期, 站点) 的不可变上传快照
+- site_upload_rows(...)            上述快照的明细，发布后仍保留，供旧版本回查
+- day_releases(...)                每日发布版本（旧版本永不删除）
+- day_release_sites(...)           版本清单：每个站点引用哪一份上传快照
+- day_release_aggregates(...)      版本内的站点汇总（与明细同事务写入）
+- current_days(...)                当前生效版本指针；未补齐的日期不会出现在这里
+
+按日发布的核心约束：明细和站点汇总只在 day_releases / day_release_sites /
+day_release_aggregates 完整写入并切换 current_days 后，才对「当前结果」可见。
 """
 from __future__ import annotations
 
@@ -74,10 +83,111 @@ CREATE TABLE IF NOT EXISTS import_attempts (
   errors_json TEXT,
   created_at TEXT NOT NULL
 );
+
+-- ---------------------------------------------------------------- 按日发布单元
+
+-- 单个 (business_date, site) 上传的完整快照。行只增不改：同一站点重发会追加新快照，
+-- 旧快照仍被历史 day_release_sites 引用，因此旧版本始终可查。
+CREATE TABLE IF NOT EXISTS site_uploads (
+  upload_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  business_date TEXT NOT NULL,
+  site TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  encoding TEXT NOT NULL,
+  bom INTEGER NOT NULL DEFAULT 0,
+  row_count INTEGER NOT NULL,
+  total_amount_cents INTEGER NOT NULL,
+  total_qty INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_site_uploads_day ON site_uploads(business_date, site);
+CREATE INDEX IF NOT EXISTS idx_site_uploads_sha ON site_uploads(business_date, site, sha256);
+
+CREATE TABLE IF NOT EXISTS site_upload_rows (
+  upload_id INTEGER NOT NULL REFERENCES site_uploads(upload_id),
+  row_no INTEGER NOT NULL,
+  order_id INTEGER NOT NULL,
+  site TEXT NOT NULL,
+  category TEXT NOT NULL,
+  order_date TEXT NOT NULL,
+  amount_cents INTEGER NOT NULL,
+  qty INTEGER NOT NULL,
+  memo TEXT,
+  PRIMARY KEY (upload_id, row_no)
+);
+CREATE INDEX IF NOT EXISTS idx_site_upload_rows_upload ON site_upload_rows(upload_id);
+
+-- 每个业务日期每次成功发布一个版本；version_no 从 1 单调递增，永不覆盖旧版本。
+CREATE TABLE IF NOT EXISTS day_releases (
+  business_date TEXT NOT NULL,
+  version_no INTEGER NOT NULL,
+  status TEXT NOT NULL,                 -- staged | published | failed
+  reason TEXT,
+  created_at TEXT NOT NULL,
+  published_at TEXT,
+  PRIMARY KEY (business_date, version_no)
+);
+
+CREATE TABLE IF NOT EXISTS day_release_sites (
+  business_date TEXT NOT NULL,
+  version_no INTEGER NOT NULL,
+  site TEXT NOT NULL,
+  upload_id INTEGER NOT NULL REFERENCES site_uploads(upload_id),
+  PRIMARY KEY (business_date, version_no, site)
+);
+
+CREATE TABLE IF NOT EXISTS day_release_aggregates (
+  business_date TEXT NOT NULL,
+  version_no INTEGER NOT NULL,
+  site TEXT NOT NULL,
+  amount_cents INTEGER NOT NULL,
+  qty INTEGER NOT NULL,
+  row_count INTEGER NOT NULL,
+  PRIMARY KEY (business_date, version_no, site)
+);
+
+-- 当前生效版本指针；只有站点齐全且全部校验通过的日期才会写入这里。
+-- 任何未补齐日期都不出现在 current_days，因此不会提前影响日汇总。
+CREATE TABLE IF NOT EXISTS current_days (
+  business_date TEXT PRIMARY KEY,
+  version_no INTEGER NOT NULL,
+  published_at TEXT NOT NULL,
+  FOREIGN KEY (business_date, version_no)
+    REFERENCES day_releases(business_date, version_no)
+);
+
+-- 「当前结果」的唯一可读口径：明细与站点汇总都从 current_days 指向的版本派生，
+-- 因此二者要么同时是旧版，要么同时是新版，不会出现中间态。
+CREATE VIEW IF NOT EXISTS v_current_release_rows AS
+SELECT c.business_date,
+       s.version_no,
+       s.site AS release_site,
+       r.row_no, r.order_id, r.site, r.category, r.order_date,
+       r.amount_cents, r.qty, r.memo
+FROM current_days c
+JOIN day_release_sites s
+  ON s.business_date = c.business_date AND s.version_no = c.version_no
+JOIN site_upload_rows r ON r.upload_id = s.upload_id;
+
+CREATE VIEW IF NOT EXISTS v_current_release_aggregates AS
+SELECT c.business_date,
+       a.version_no,
+       a.site,
+       a.amount_cents,
+       a.qty,
+       a.row_count
+FROM current_days c
+JOIN day_release_aggregates a
+  ON a.business_date = c.business_date AND a.version_no = c.version_no;
 """
 
 # 允许的上传策略（避免路由随意传值）
-STATUSES = ("committed", "duplicate_file", "rejected", "encoding_failed", "rolled_back")
+STATUSES = (
+    "committed", "duplicate_file", "rejected", "encoding_failed", "rolled_back",
+    # 按日发布单元的状态
+    "published", "staged", "unchanged",
+)
 
 
 def now_iso() -> str:
@@ -228,7 +338,24 @@ def stats(conn: sqlite3.Connection) -> dict:
     batches = conn.execute("SELECT COUNT(*) AS c FROM batches").fetchone()["c"]
     fact = count_rows(conn)
     rejected = conn.execute(
-        "SELECT COUNT(*) AS c FROM import_attempts WHERE status IN ('rejected','encoding_failed')"
+        "SELECT COUNT(*) AS c FROM import_attempts"
+        " WHERE status IN ('rejected','encoding_failed','rolled_back')"
     ).fetchone()["c"]
     sites = conn.execute("SELECT COUNT(DISTINCT site) AS c FROM fact_orders").fetchone()["c"]
-    return {"batches": batches, "fact_rows": fact, "rejected_attempts": rejected, "sites": sites}
+    released_days = conn.execute("SELECT COUNT(*) AS c FROM current_days").fetchone()["c"]
+    released_rows = conn.execute(
+        "SELECT COUNT(*) AS c FROM v_current_release_rows"
+    ).fetchone()["c"]
+    pending_days = conn.execute(
+        "SELECT COUNT(DISTINCT business_date) AS c FROM site_uploads"
+        " WHERE business_date NOT IN (SELECT business_date FROM current_days)"
+    ).fetchone()["c"]
+    return {
+        "batches": batches,
+        "fact_rows": fact,
+        "rejected_attempts": rejected,
+        "sites": sites,
+        "released_days": released_days,
+        "released_rows": released_rows,
+        "pending_days": pending_days,
+    }
